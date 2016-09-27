@@ -179,6 +179,14 @@ defmodule Sqlite.Ecto.Test do
     assert SQL.execute_ddl(create) == ~s{CREATE TABLE "posts" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "category_0" CONSTRAINT "posts_category_0_fkey" REFERENCES "categories"("id"), "category_1" CONSTRAINT "foo_bar" REFERENCES "categories"("id"), "category_2" CONSTRAINT "posts_category_2_fkey" REFERENCES "categories"("id"), "category_3" NOT NULL CONSTRAINT "posts_category_3_fkey" REFERENCES "categories"("id") ON DELETE CASCADE, "category_4" CONSTRAINT "posts_category_4_fkey" REFERENCES "categories"("id") ON DELETE SET NULL)}
   end
 
+  test "create table with composite primary key" do
+    create = {:create, table(:posts),
+              [{:add, :id, :integer, [primary_key: true]},
+               {:add, :id2, :integer, [primary_key: true]},
+               {:add, :created_at, :datetime, []}]}
+    assert SQL.execute_ddl(create) == ~s{CREATE TABLE "posts" ("id" INTEGER, "id2" INTEGER, "created_at" DATETIME, PRIMARY KEY ("id", "id2"))}
+  end
+
   test "drop table" do
     assert SQL.execute_ddl({:drop, %Table{name: "posts"}}) == ~s{DROP TABLE "posts"}
   end

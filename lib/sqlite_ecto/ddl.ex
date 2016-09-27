@@ -14,7 +14,16 @@ defmodule Sqlite.Ecto.DDL do
   # Create a table.
   def execute_ddl({command, %Table{} = table, columns})
   when command in [:create, :create_if_not_exists] do
-    assemble [create_table(command), quote_table(table), column_definitions(table, columns), table.options]
+    table_name = quote_table(table)
+    column_defs = column_definitions(table, columns)
+
+    defs_and_constraints =
+      case table_constraints(table, columns) do
+        [] -> column_defs
+        constraints -> [column_defs, ",", constraints]
+      end
+
+    assemble [create_table(command), table_name, "(", defs_and_constraints, ")", table.options]
   end
 
   # Drop a table.
@@ -84,7 +93,7 @@ defmodule Sqlite.Ecto.DDL do
   defp drop_table(:drop_if_exists), do: "DROP TABLE IF EXISTS"
 
   defp column_definitions(table, cols) do
-    ["(", map_intersperse(cols, ",", &column_definition(table, &1)), ")"]
+    map_intersperse(cols, ",", &column_definition(table, &1))
   end
 
   defp column_definition(table, {_action, name, ref = %Reference{}, opts}) do
@@ -95,6 +104,26 @@ defmodule Sqlite.Ecto.DDL do
   defp column_definition({_action, name, type, opts}) do
     opts = Enum.into(opts, %{})
     [quote_id(name), column_type(type, opts), column_constraints(type, opts)]
+  end
+
+  def table_constraints(table, columns) do
+    IO.inspect table
+    IO.inspect columns
+
+    primary_keys =
+      columns
+      |> Enum.filter(fn
+        {_, _, :serial, _} -> false
+        {_, _, _, opts} -> Keyword.get(opts, :primary_key, false)
+      end)
+
+    case primary_keys do
+      [] -> []
+      keys ->
+        key_names = Enum.map(keys, fn {_, name, _, _} -> quote_id(name) end)
+
+        ["PRIMARY KEY(", Enum.join(key_names, ", "), ")"]
+    end
   end
 
   # Foreign keys:
@@ -132,10 +161,6 @@ defmodule Sqlite.Ecto.DDL do
   # NOTE The order of these constraints does not matter to SQLite, but
   # rearranging them may cause tests that rely on their order to fail.
   defp column_constraints(_type, opts), do: column_constraints(opts)
-  defp column_constraints(opts=%{primary_key: true}) do
-    other_constraints = opts |> Map.delete(:primary_key) |> column_constraints
-    ["PRIMARY KEY" | other_constraints]
-  end
   defp column_constraints(opts=%{default: default}) do
     val = case default do
       true -> 1
