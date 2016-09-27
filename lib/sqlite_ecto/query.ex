@@ -362,14 +362,14 @@ defmodule Sqlite.Ecto.Query do
     "#{name}.#{quote_id(field)}"
   end
 
-  defp expr({:&, _, [idx, _fields, _counter]}, sources) do
+  defp expr({:&, _, [idx, fields, _counter]}, sources) do
     {table, name, model} = elem(sources, idx)
-    unless model do
+    if is_nil(model) and is_nil(fields) do
       raise ArgumentError, "SQLite requires a model when using selector #{inspect name} but " <>
                            "only the table #{inspect table} was given. Please specify a model " <>
                            "or specify exactly which fields from #{inspect name} you desire"
     end
-    map_intersperse(model.__schema__(:fields), ",", &"#{name}.#{quote_id(&1)}")
+    map_intersperse(fields, ",", &"#{name}.#{quote_id(&1)}")
   end
 
   defp expr({:in, _, [left, right]}, sources) when is_list(right) do

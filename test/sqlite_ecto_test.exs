@@ -381,6 +381,11 @@ defmodule Sqlite.Ecto.Test do
     end
   end
 
+  test "select from schema with limited fields" do
+    query = from(m in Model, select: [:x]) |> normalize
+    assert SQL.all(query) == ~s{SELECT m0."x" FROM "model" AS m0}
+  end
+
 #  test "from with schema source" do
 #    query = "public.posts" |> select([r], r.x) |> normalize
 #    assert SQL.all(query) == ~s{SELECT p0."x" FROM "public"."posts" AS p0}
