@@ -44,11 +44,32 @@ defmodule Sqlite.Ecto.Protocol do
 
   def checkin(s), do: {:ok, s}
 
-  def handle_begin(opts, db), do: exec(db, "BEGIN TRANSACTION;")
+  def handle_begin(opts, db) do
+    case Keyword.get(opts, :mode, :transaction) do
+      :transaction ->
+        exec(db, "BEGIN TRANSACTION;")
+      :savepoint ->
+        exec(db, "SAVEPOINT sqlite_ecto_savepoint;")
+    end
+  end
 
-  def handle_commit(opts, db), do: exec(db, "COMMIT TRANSACTION;")
+  def handle_commit(opts, db) do
+    case Keyword.get(opts, :mode, :transaction) do
+      :transaction ->
+        exec(db, "COMMIT TRANSACTION;")
+      :savepoint ->
+        exec(db, "RELEASE SAVEPOINT sqlite_ecto_savepoint;")
+    end
+  end
 
-  def handle_rollback(opts, db), do: exec(db, "ROLLBACK TRANSACTION;")
+  def handle_rollback(opts, db) do
+    case Keyword.get(opts, :mode, :transaction) do
+      :transaction ->
+        exec(db, "ROLLBACK TRANSACTION;")
+      :savepoint ->
+        exec(db, "ROLLBACK TO SAVEPOINT sqlite_ecto_savepoint;")
+    end
+  end
 
   def handle_prepare(query, opts, db), do: {:ok, query, db}
 
