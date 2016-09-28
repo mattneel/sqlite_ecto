@@ -25,10 +25,10 @@ defmodule Sqlite.Ecto.Protocol do
 
   def connect(opts) do
     {database, opts} = Keyword.pop(opts, :database)
-    case Sqlitex.open(database) do
+    case Sqlitex.Server.start_link(database) do
       {:ok, db} ->
-        :ok = Sqlitex.exec(db, "PRAGMA foreign_keys = ON")
-        {:ok, [[foreign_keys: 1]]} = Sqlitex.query(db, "PRAGMA foreign_keys")
+        :ok = Sqlitex.Server.exec(db, "PRAGMA foreign_keys = ON")
+        {:ok, [[foreign_keys: 1]]} = Sqlitex.Server.query(db, "PRAGMA foreign_keys")
         {:ok, db}
       error ->
         error
@@ -36,7 +36,7 @@ defmodule Sqlite.Ecto.Protocol do
   end
 
   def disconnect(_, db) do
-    Sqlitex.close(db)
+    Sqlitex.Server.stop(db)
     :ok
   end
 
@@ -79,7 +79,7 @@ defmodule Sqlite.Ecto.Protocol do
   end
 
   defp exec(db, sql) do
-    case Sqlitex.exec(db, sql) do
+    case Sqlitex.Server.exec(db, sql) do
       :ok ->
         {:ok, nil, db}
       {:error, err} ->

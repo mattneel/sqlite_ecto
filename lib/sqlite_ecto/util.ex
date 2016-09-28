@@ -6,7 +6,7 @@ defmodule Sqlite.Ecto.Util do
 
   # Execute a SQL query.
   def exec(pid, sql) do
-    case Sqlitex.exec(pid, sql) do
+    case Sqlitex.Server.exec(pid, sql) do
       # busy error means another process is writing to the database; try again
       {:error, {:busy, _}} -> exec(pid, sql)
       res -> res

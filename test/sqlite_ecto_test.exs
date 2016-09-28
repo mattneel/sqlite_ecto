@@ -5,7 +5,7 @@ defmodule Sqlite.Ecto.Test do
   alias Ecto.Migration.Table
 
   setup do
-    {:ok, conn} = Sqlitex.open(":memory:")
+    {:ok, conn} = Sqlitex.Server.start_link(":memory:")
     {:ok, conn: conn}
   end
 
@@ -289,7 +289,7 @@ defmodule Sqlite.Ecto.Test do
     assert stmt == ~s{CREATE TABLE "posts" ("author" TEXT, "price" INTEGER, "summary" TEXT, "body" TEXT, "title" TEXT DEFAULT 'Untitled' NOT NULL, "email" TEXT)}
 
     # verify the values have been preserved
-    {:ok, [row]} = Sqlitex.query(conn, "SELECT * FROM posts")
+    {:ok, [row]} = Sqlitex.Server.query(conn, "SELECT * FROM posts")
     assert "jazzyb" == Keyword.get(row, :author)
     assert 2 == Keyword.get(row, :price)
     assert "Longer, more detailed statement." == Keyword.get(row, :body)

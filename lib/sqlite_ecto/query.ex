@@ -221,7 +221,7 @@ defmodule Sqlite.Ecto.Query do
     mapper = opts[:decode_mapper] || fn x -> x end
     opts = opts |> Keyword.put(:bind, params)
 
-    case Sqlitex.query(pid, sql, opts) do
+    case Sqlitex.Server.query(pid, sql, opts) do
       # busy error means another process is writing to the database; try again
       {:error, {:busy, _}} -> do_query(pid, sql, params, opts)
       {:error, msg} -> {:error, Sqlite.Ecto.Error.exception(msg)}
@@ -248,7 +248,7 @@ defmodule Sqlite.Ecto.Query do
   end
 
   defp changes_result(pid) do
-    {:ok, [["changes()": count]]} = Sqlitex.query(pid, "SELECT changes()")
+    {:ok, [["changes()": count]]} = Sqlitex.Server.query(pid, "SELECT changes()")
     {:ok, %{rows: nil, num_rows: count}}
   end
 
