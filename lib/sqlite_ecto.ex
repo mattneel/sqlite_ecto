@@ -37,9 +37,21 @@ defmodule Sqlite.Ecto do
 
   ## Custom SQLite Types
 
-  def loaders({:embed, _} = type, _), do: [&json_library.decode!/1]
-  def loaders(:map, _), do: [&json_library.decode!/1]
+  def loaders({:embed, _} = type, _), do: [&load_embed(type, &1)]
+  def loaders(:map, _), do: [&json_library.decode/1]
+  def loaders({:map, _}, _), do: [&json_library.decode/1]
   def loaders(primitive_type, ecto_type), do: super(primitive_type, ecto_type)
+
+  defp load_embed(type, data) do
+    case json_library.decode(data) do
+      {:ok, map} ->
+        Ecto.Type.load(type, map, fn
+          {:embed, _} = type, value -> load_embed(type, value)
+          type, value -> Ecto.Type.cast(type, value)
+        end)
+      _ -> :error
+    end
+  end
 
   ## Storage API
 
