@@ -1,9 +1,11 @@
 defmodule Sqlite.Ecto.DDL do
   @moduledoc false
 
+
   alias Ecto.Migration.Table
   alias Ecto.Migration.Index
   alias Ecto.Migration.Reference
+  alias Sqlite.Ecto.Query
   import Sqlite.Ecto.Util, only: [assemble: 1, map_intersperse: 3, quote_id: 1]
 
   # Raise error on NoSQL arguments.
@@ -23,25 +25,31 @@ defmodule Sqlite.Ecto.DDL do
         constraints -> [column_defs, ",", constraints]
       end
 
-    assemble [create_table(command), table_name, "(", defs_and_constraints, ")", table.options]
+    %Query{
+      sql: assemble [
+        create_table(command), table_name, "(", defs_and_constraints, ")", table.options
+      ]
+    }
   end
 
   # Drop a table.
   def execute_ddl({command, %Table{} = table})
   when command in [:drop, :drop_if_exists] do
-    assemble [drop_table(command), quote_table(table)]
+    %Query{ sql: assemble [drop_table(command), quote_table(table)] }
   end
 
   # Alter a table.
   def execute_ddl({:alter, %Table{} = table, changes}) do
-    Enum.map_join(changes, "; ", fn (change) ->
-      assemble ["ALTER TABLE", quote_table(table), alter_table_suffix(table, change)]
-    end)
+    %Query{
+      sql: Enum.map_join(changes, "; ", fn (change) ->
+        assemble ["ALTER TABLE", quote_table(table), alter_table_suffix(table, change)]
+      end)
+    }
   end
 
   # Rename a table.
   def execute_ddl({:rename, %Table{} = old, %Table{} = new}) do
-    "ALTER TABLE #{quote_table(old)} RENAME TO #{quote_table(new)}"
+    %Query{sql: "ALTER TABLE #{quote_table(old)} RENAME TO #{quote_table(new)}"}
   end
 
   # Rename a table column.
@@ -56,13 +64,15 @@ defmodule Sqlite.Ecto.DDL do
     create_index = create_index(command, index.unique)
     table = quote_table(index.prefix, index.table)
     fields = map_intersperse(index.columns, ",", &quote_id/1)
-    assemble [create_index, quote_id(index.name), "ON", table, "(", fields, ")"]
+    %Query{
+      sql: assemble [create_index, quote_id(index.name), "ON", table, "(", fields, ")"]
+    }
   end
 
   # Drop an index.
   def execute_ddl({command, %Index{name: name}})
   when command in [:drop, :drop_if_exists] do
-    assemble [drop_index(command), quote_id(name)]
+    %Query{sql: assemble [drop_index(command), quote_id(name)]}
   end
 
   # Raise error on NoSQL arguments.
@@ -71,7 +81,7 @@ defmodule Sqlite.Ecto.DDL do
   end
 
   # Default:
-  def execute_ddl(default) when is_binary(default), do: default
+  def execute_ddl(default) when is_binary(default), do: %Query{sql: default}
 
   ## Helpers
 

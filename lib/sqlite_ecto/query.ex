@@ -4,8 +4,40 @@ defmodule Sqlite.Ecto.Query do
   import Sqlite.Ecto.Transaction, only: [with_savepoint: 2]
   import Sqlite.Ecto.Util
 
+  alias Sqlite.Ecto.Query
+
+  defmodule ReturningInfo do
+    defstruct [:table, :cols, :query, :ref]
+
+    @type t :: %__MODULE__{
+      table: String.t,
+      cols: [String.t],
+      query: String.t,
+      ref: String.t
+    }
+  end
+
+  # sql: A query string, or a list of query strings.
+  # sql_param_count: the (usually optional) number of parameters in each sql
+  # query.
+  # returning: ReturningInfo if the query has a reutrning clause.
+  defstruct [:sql, :sql_param_count, :returning]
+
+  @type t :: %__MODULE__{
+    sql: String.t | [String.t],
+    sql_param_count: non_neg_integer | [non_neg_integer] | nil,
+    returning: ReturningInfo.t | nil
+  }
+
+  defimpl String.Chars, for: __MODULE__ do
+    def to_string(%Query{sql: sql}) do
+      # TODO: Add returning to this?
+      "Query{sql: \"#{sql}\"}"
+    end
+  end
+
   # ALTER TABLE queries:
-  def execute(pid, <<"ALTER TABLE ", _ :: binary>>=sql, params, opts) do
+  def execute(pid, %Query{sql: <<"ALTER TABLE ", _ :: binary>>=sql}, params, opts) do
     sql
     |> String.split("; ")
     |> Enum.reduce(:ok, fn
@@ -14,7 +46,7 @@ defmodule Sqlite.Ecto.Query do
     end)
   end
   # all other queries:
-  def execute(pid, sql, params, opts) do
+  def execute(pid, %Query{sql: sql}, params, opts) do
     params = Enum.map(params, fn
       %Ecto.Query.Tagged{type: :binary, value: value} when is_binary(value) -> {:blob, value}
       %Ecto.Query.Tagged{value: value} -> value
@@ -44,7 +76,9 @@ defmodule Sqlite.Ecto.Query do
     order_by = order_by(query.order_bys, sources)
     limit = limit(query.limit, query.offset, sources)
 
-    assemble [select, from, join, where, group_by, order_by, limit]
+    %Query{
+      sql: assemble [select, from, join, where, group_by, order_by, limit]
+    }
   end
 
   def update_all(%Ecto.Query{joins: [_ | _]}) do
@@ -55,7 +89,9 @@ defmodule Sqlite.Ecto.Query do
     {table, _name, _model} = elem(sources, 0)
     fields = update_fields(query.updates, sources)
     where = where(query.wheres, sources)
-    assemble ["UPDATE", quote_id(table), "SET", fields, where]
+    %Query{
+      sql: assemble ["UPDATE", quote_id(table), "SET", fields, where]
+    }
   end
 
   def delete_all(%Ecto.Query{joins: [_ | _]}) do
@@ -65,18 +101,27 @@ defmodule Sqlite.Ecto.Query do
     sources = create_names(query, :delete)
     {table, _name, _model} = elem(sources, 0)
     where = where(query.wheres, sources)
-    assemble ["DELETE FROM", quote_id(table), where]
+    %Query{
+      sql: assemble ["DELETE FROM", quote_id(table), where]
+    }
   end
 
   def insert(prefix, table, [], rows, returning) do
     return = returning_clause(prefix, table, returning, "INSERT")
-    assemble ["INSERT INTO", quote_id({prefix, table}), "DEFAULT VALUES", return]
+    %Query{
+      sql: assemble ["INSERT INTO", quote_id({prefix, table}), "DEFAULT VALUES", return]
+    }
   end
   def insert(prefix, table, header, rows, returning) do
     cols = map_intersperse(header, ",", &quote_id/1)
     vals = insert_all(rows, 1, "")
     return = returning_clause(prefix, table, returning, "INSERT")
-    assemble ["INSERT INTO", quote_id({prefix, table}), "(", cols, ")", "VALUES", vals, return]
+    %Query{
+      sql: assemble [
+        "INSERT INTO", quote_id({prefix, table}), "(", cols, ")",
+        "VALUES", vals, return
+      ]
+    }
   end
 
   defp insert_all([row|rows], counter, acc) do
@@ -101,13 +146,17 @@ defmodule Sqlite.Ecto.Query do
     vals = Enum.intersperse(vals, ",")
     where = where_filter(filters, count)
     return = returning_clause(prefix, table, returning, "UPDATE")
-    assemble ["UPDATE", quote_id({prefix, table}), "SET", vals, where, return]
+    %Query{
+      sql: assemble ["UPDATE", quote_id({prefix, table}), "SET", vals, where, return]
+    }
   end
 
   def delete(prefix, table, filters, returning) do
     where = where_filter(filters)
     return = returning_clause(prefix, table, returning, "DELETE")
-    assemble ["DELETE FROM", quote_id({prefix, table}), where, return]
+    %Query{
+      sql: assemble ["DELETE FROM", quote_id({prefix, table}), where, return]
+    }
   end
 
   ## Returning Clause Helpers
