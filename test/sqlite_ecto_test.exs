@@ -2,6 +2,7 @@ defmodule Sqlite.Ecto.Test do
   use ExUnit.Case, async: true
 
   alias Sqlite.Ecto.Connection, as: SQL
+  alias Sqlite.Ecto.Query.ReturningInfo
   alias Ecto.Migration.Table
 
   setup do
@@ -43,13 +44,28 @@ defmodule Sqlite.Ecto.Test do
 
   test "insert" do
     query = SQL.insert(nil, "model", [:x, :y], [[:x, :y]], [:id])
-    assert query.sql == ~s{INSERT INTO "model" ("x", "y") VALUES (?1,?2) ;--RETURNING ON INSERT "model","id"}
+    assert query.sql == ~s{INSERT INTO "model" ("x", "y") VALUES (?1,?2)}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"id"}],
+      query_type: "INSERT"
+    }
 
     query = SQL.insert(nil, "model", [], [], [:id])
-    assert query.sql == ~s{INSERT INTO "model" DEFAULT VALUES ;--RETURNING ON INSERT "model","id"}
+    assert query.sql == ~s{INSERT INTO "model" DEFAULT VALUES}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"id"}],
+      query_type: "INSERT"
+    }
 
     query = SQL.insert("prefix", "model", [], [], [:id])
-    assert query.sql == ~s{INSERT INTO "prefix"."model" DEFAULT VALUES ;--RETURNING ON INSERT "prefix"."model","id"}
+    assert query.sql == ~s{INSERT INTO "prefix"."model" DEFAULT VALUES}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"prefix"."model"},
+      cols: [~s{"id"}],
+      query_type: "INSERT"
+    }
 
     query = SQL.insert(nil, "model", [], [], [])
     assert query.sql == ~s{INSERT INTO "model" DEFAULT VALUES}
@@ -60,10 +76,20 @@ defmodule Sqlite.Ecto.Test do
 
   test "update" do
     query = SQL.update(nil, "model", [:x, :y], [:id], [:x, :z])
-    assert query.sql == ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3 ;--RETURNING ON UPDATE "model","x","z"}
+    assert query.sql == ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"x"}, ~s{"z"}],
+      query_type: "UPDATE"
+    }
 
     query = SQL.update("prefix", "model", [:x, :y], [:id], [:x, :z])
-    assert query.sql == ~s{UPDATE "prefix"."model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3 ;--RETURNING ON UPDATE "prefix"."model","x","z"}
+    assert query.sql == ~s{UPDATE "prefix"."model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"prefix"."model"},
+      cols: [~s{"x"}, ~s{"z"}],
+      query_type: "UPDATE"
+    }
 
     query = SQL.update(nil, "model", [:x, :y], [:id], [])
     assert query.sql == ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3}
@@ -74,10 +100,20 @@ defmodule Sqlite.Ecto.Test do
 
   test "delete" do
     query = SQL.delete(nil, "model", [:x, :y], [:z])
-    assert query.sql == ~s{DELETE FROM "model" WHERE "x" = ?1 AND "y" = ?2 ;--RETURNING ON DELETE "model","z"}
+    assert query.sql == ~s{DELETE FROM "model" WHERE "x" = ?1 AND "y" = ?2}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"z"}],
+      query_type: "DELETE"
+    }
 
     query = SQL.delete("prefix", "model", [:x, :y], [:z])
-    assert query.sql == ~s{DELETE FROM "prefix"."model" WHERE "x" = ?1 AND "y" = ?2 ;--RETURNING ON DELETE "prefix"."model","z"}
+    assert query.sql == ~s{DELETE FROM "prefix"."model" WHERE "x" = ?1 AND "y" = ?2}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"prefix"."model"},
+      cols: [~s{"z"}],
+      query_type: "DELETE"
+    }
 
     query = SQL.delete(nil, "model", [:x, :y], [])
     assert query.sql == ~s{DELETE FROM "model" WHERE "x" = ?1 AND "y" = ?2}
@@ -89,26 +125,39 @@ defmodule Sqlite.Ecto.Test do
   test "execute", context do
     conn = context[:conn]
 
-    run_sql = fn (query, params) ->
-      Sqlite.Ecto.Query.execute(conn, %Sqlite.Ecto.Query{sql: query}, params, [])
-    end
+    alias Sqlite.Ecto.Query
 
-    query = "CREATE TABLE model (id, x, y, z)"
-    {:ok, %{num_rows: 0, rows: []}} = run_sql.(query, [])
+    query = %Query{sql: "CREATE TABLE model (id, x, y, z)"}
+    {:ok, %{num_rows: 0, rows: []}} = Query.execute(conn, query, [], [])
 
-    query = "INSERT INTO model VALUES (1, 2, 3, 4)"
-    {:ok, %{num_rows: 1, rows: nil}} = run_sql.(query, [])
+    query = %Query{sql: "INSERT INTO model VALUES (1, 2, 3, 4)"}
+    {:ok, %{num_rows: 1, rows: nil}} = Query.execute(conn, query, [], [])
 
-    query = ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3 ;--RETURNING ON UPDATE "model","x","z"}
-    {:ok, %{num_rows: 1, rows: [row]}} = run_sql.(query, [:foo, :bar, 1])
+    query = %Query{
+      sql: ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3},
+      returning: %ReturningInfo{
+        table: ~s{"model"}, cols: [~s{"x"}, ~s{"z"}], query_type: "UPDATE"
+      }
+    }
+    {:ok, %{num_rows: 1, rows: [row]}} = Query.execute(conn, query, [:foo, :bar, 1], [])
     assert row == ["foo", 4]
 
-    query = ~s{INSERT INTO "model" VALUES (?1, ?2, ?3, ?4) ;--RETURNING ON INSERT "model","id"}
-    {:ok, %{num_rows: 1, rows: [row]}} = run_sql.(query, [:a, :b, :c, :d])
+    query = %Query{
+      sql: ~s{INSERT INTO "model" VALUES (?1, ?2, ?3, ?4)},
+      returning: %ReturningInfo{
+        table: ~s{"model"}, cols: [~s{"id"}], query_type: "INSERT"
+      }
+    }
+    {:ok, %{num_rows: 1, rows: [row]}} = Query.execute(conn, query, [:a, :b, :c, :d], [])
     assert row == ["a"]
 
-    query = ~s{DELETE FROM "model" WHERE "id" = ?1 ;--RETURNING ON DELETE "model","id","x","y","z"}
-    {:ok, %{num_rows: 1, rows: [row]}} = run_sql.(query, [1])
+    query = %Query{
+      sql: ~s{DELETE FROM "model" WHERE "id" = ?1},
+      returning: %ReturningInfo{
+        table: ~s{"model"}, cols: [~s{"id"}, ~s{"x"}, ~s{"y"}, ~s{"z"}], query_type: "DELETE"
+      }
+    }
+    {:ok, %{num_rows: 1, rows: [row]}} = Query.execute(conn, query, [1], [])
     assert row == [1, "foo", "bar", 4]
   end
 

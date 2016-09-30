@@ -7,13 +7,12 @@ defmodule Sqlite.Ecto.Query do
   alias Sqlite.Ecto.Query
 
   defmodule ReturningInfo do
-    defstruct [:table, :cols, :query, :ref]
+    defstruct [:table, :cols, :query_type]
 
     @type t :: %__MODULE__{
       table: String.t,
       cols: [String.t],
-      query: String.t,
-      ref: String.t
+      query_type: String.t
     }
   end
 
@@ -36,15 +35,21 @@ defmodule Sqlite.Ecto.Query do
     end
   end
 
+  def execute(pid, %Query{returning: returning} = query, params, opts)
+  when not is_nil(returning) do
+    returning_query(pid, query, params, opts)
+  end
+
   # ALTER TABLE queries:
   def execute(pid, %Query{sql: <<"ALTER TABLE ", _ :: binary>>=sql}, params, opts) do
     sql
     |> String.split("; ")
     |> Enum.reduce(:ok, fn
       (_, {:error, _} = error) -> error
-      (alter_stmt, _) -> do_query(pid, alter_stmt, params, opts)
+      (alter_stmt, _) -> do_execute(pid, alter_stmt, params, opts)
     end)
   end
+
   # all other queries:
   def execute(pid, %Query{sql: sql}, params, opts) do
     params = Enum.map(params, fn
@@ -55,11 +60,7 @@ defmodule Sqlite.Ecto.Query do
       value -> value
     end)
 
-    if has_returning_clause?(sql) do
-      returning_query(pid, sql, params, opts)
-    else
-      do_query(pid, sql, params, opts)
-    end
+    do_execute(pid, sql, params, opts)
   end
 
   def all(%Ecto.Query{lock: lock}) when lock != nil do
@@ -107,20 +108,47 @@ defmodule Sqlite.Ecto.Query do
   end
 
   def insert(prefix, table, [], rows, returning) do
-    return = returning_clause(prefix, table, returning, "INSERT")
+    returning = returning_info(prefix, table, returning, "INSERT")
     %Query{
-      sql: assemble ["INSERT INTO", quote_id({prefix, table}), "DEFAULT VALUES", return]
+      sql: assemble(["INSERT INTO", quote_id({prefix, table}), "DEFAULT VALUES"]),
+      returning: returning
+    }
+  end
+  def insert(prefix, table, header, [row], returning) do
+    # Ecto sometimes populates columns in a row with nil, which it expects to be
+    # replaced by DEFAULT. However, sqlite doesn't support DEFAULT in an INSERT
+    # statement.
+    # So for the simple case of a single row insert we make sure not to include
+    # rows to be set to default in the statement.
+    {header, row} =
+      Enum.zip(header, row)
+      |> Enum.reject(fn
+        {_, nil} -> true
+        _ -> false
+      end)
+      |> Enum.unzip
+
+    cols = map_intersperse(header, ",", &quote_id/1)
+    vals = insert_all([row], 1, "")
+    returning = returning_info(prefix, table, returning, "INSERT")
+    %Query{
+      sql: assemble([
+        "INSERT INTO", quote_id({prefix, table}), "(", cols, ")",
+        "VALUES", vals
+      ]),
+      returning: returning
     }
   end
   def insert(prefix, table, header, rows, returning) do
     cols = map_intersperse(header, ",", &quote_id/1)
     vals = insert_all(rows, 1, "")
-    return = returning_clause(prefix, table, returning, "INSERT")
+    returning = returning_info(prefix, table, returning, "INSERT")
     %Query{
-      sql: assemble [
+      sql: assemble([
         "INSERT INTO", quote_id({prefix, table}), "(", cols, ")",
-        "VALUES", vals, return
-      ]
+        "VALUES", vals
+      ]),
+      returning: returning
     }
   end
 
@@ -145,17 +173,19 @@ defmodule Sqlite.Ecto.Query do
     end)
     vals = Enum.intersperse(vals, ",")
     where = where_filter(filters, count)
-    return = returning_clause(prefix, table, returning, "UPDATE")
+    returning = returning_info(prefix, table, returning, "UPDATE")
     %Query{
-      sql: assemble ["UPDATE", quote_id({prefix, table}), "SET", vals, where, return]
+      sql: assemble(["UPDATE", quote_id({prefix, table}), "SET", vals, where]),
+      returning: returning
     }
   end
 
   def delete(prefix, table, filters, returning) do
     where = where_filter(filters)
-    return = returning_clause(prefix, table, returning, "DELETE")
+    returning = returning_info(prefix, table, returning, "DELETE")
     %Query{
-      sql: assemble ["DELETE FROM", quote_id({prefix, table}), where, return]
+      sql: assemble(["DELETE FROM", quote_id({prefix, table}), where]),
+      returning: returning
     }
   end
 
@@ -184,52 +214,29 @@ defmodule Sqlite.Ecto.Query do
   #   RELEASE sp_<random>;
   #
   # which is implemented by the following code:
-  defp returning_query(pid, sql, params, opts) do
-    {sql, table, returning, query, ref} = parse_returning_clause(sql)
+  defp returning_query(pid, query, params, opts) do
+    %{table: table, cols: returning, query_type: query_type} = query.returning
+
+    ref = case query_type do
+      "DELETE" -> "OLD"
+      "INSERT" -> "NEW"
+      "UPDATE" -> "NEW"
+    end
 
     with_savepoint(pid, fn ->
       with_temp_table(pid, returning, fn (tmp_tbl) ->
-        err = with_temp_trigger(pid, table, tmp_tbl, returning, query, ref, fn ->
-          do_query(pid, sql, params, opts)
+        err = with_temp_trigger(pid, table, tmp_tbl, returning, query_type, ref, fn ->
+          execute(pid, %{query | returning: nil}, params, opts)
         end)
 
         case err do
           {:error, _} -> err
           _ ->
             fields = Enum.join(returning, ", ")
-            do_query(pid, "SELECT #{fields} FROM #{tmp_tbl}", [], opts)
+            do_execute(pid, "SELECT #{fields} FROM #{tmp_tbl}", [], opts)
         end
       end)
     end)
-  end
-
-  # Does this SQL statement have a returning clause in it?
-  defp has_returning_clause?(sql) do
-    String.contains?(sql, @pseudo_returning_statement)
-  end
-
-  # Find our fake returning clause and return the SQL statement without it,
-  # table name, and returning fields that we saved from the call to
-  # insert(), update(), or delete().
-  defp parse_returning_clause(sql) do
-    [sql, returning_clause] = String.split(sql, @pseudo_returning_statement)
-    {table, cols, query, ref} = parse_return_contents(returning_clause)
-    {sql, table, cols, query, ref}
-  end
-
-  # From our returning clause, return the table, columns, command, and whether
-  # we are interested in the "NEW" or "OLD" values of the modified rows.
-  defp parse_return_contents(<<"INSERT ", values::binary>>) do
-    [table | cols] = String.split(values, ",")
-    {table, cols, "INSERT", "NEW"}
-  end
-  defp parse_return_contents(<<"UPDATE ", values::binary>>) do
-    [table | cols] = String.split(values, ",")
-    {table, cols, "UPDATE", "NEW"}
-  end
-  defp parse_return_contents(<<"DELETE ", values::binary>>) do
-    [table | cols] = String.split(values, ",")
-    {table, cols, "DELETE", "OLD"}
   end
 
   # Create a temp table to save the values we will write with our trigger
@@ -266,13 +273,13 @@ defmodule Sqlite.Ecto.Query do
 
   # Execute a query with (possibly) binded parameters and handle busy signals
   # from the database.
-  defp do_query(pid, sql, params, opts) do
+  defp do_execute(pid, sql, params, opts) do
     mapper = opts[:decode_mapper] || fn x -> x end
     opts = opts |> Keyword.put(:bind, params)
 
     case Sqlitex.Server.query(pid, sql, opts) do
       # busy error means another process is writing to the database; try again
-      {:error, {:busy, _}} -> do_query(pid, sql, params, opts)
+      {:error, {:busy, _}} -> do_execute(pid, sql, params, opts)
       {:error, msg} -> {:error, Sqlite.Ecto.Error.exception(msg)}
       {:ok, rows} -> query_result(pid, sql, rows, mapper)
     end
@@ -326,15 +333,17 @@ defmodule Sqlite.Ecto.Query do
     {{String.to_integer(yr), String.to_integer(mo), String.to_integer(da)},{String.to_integer(hr), String.to_integer(mi), String.to_integer(se), String.to_integer(fr)}}
   end
 
-  # SQLite does not have a returning clause, but we append a pseudo one so
-  # that query() can parse the string later and emulate it with a
-  # transaction and trigger.
+  # SQLite does not have a returning clause, but we store a ReturningInfo
+  # struct that query() can use later to emulate it with a transaction and
+  # trigger.
   # See: returning_query()
-  defp returning_clause(_prefix, _table, [], _cmd), do: []
-  defp returning_clause(prefix, table, returning, cmd) do
-    return = String.strip(@pseudo_returning_statement)
-    fields = Enum.map_join([{prefix, table} | returning], ",", &quote_id/1)
-    [return, cmd, fields]
+  defp returning_info(_prefix, _table, [], _cmd), do: nil
+  defp returning_info(prefix, table, returning, cmd) do
+    %ReturningInfo{
+      table: quote_id({prefix, table}),
+      cols: Enum.map(returning, &quote_id/1),
+      query_type: cmd
+    }
   end
 
   ## Query generation
