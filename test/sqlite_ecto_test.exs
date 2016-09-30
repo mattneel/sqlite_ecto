@@ -760,6 +760,15 @@ defmodule Sqlite.Ecto.Test do
     query = from(m in Model, update: [set: [x: ^0]]) |> normalize(:update_all)
     assert SQL.update_all(query).sql == ~s{UPDATE "model" SET "x" = ?}
 
+    query = from(m in Model, update: [set: [x: 0]], select: [:x]) |> normalize(:update_all)
+    query = SQL.update_all(query)
+    assert query.sql == ~s{UPDATE "model" SET "x" = 0}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"x"}],
+      query_type: "UPDATE"
+    }
+
     assert_raise ArgumentError, "JOINS are not supported on UPDATE statements by SQLite", fn ->
       query = Model |> join(:inner, [p], q in Model2, p.x == q.z)
                     |> update([_], set: [x: 0]) |> normalize(:update_all)
@@ -773,6 +782,15 @@ defmodule Sqlite.Ecto.Test do
 
     query = from(e in Model, where: e.x == 123) |> normalize
     assert SQL.delete_all(query).sql == ~s{DELETE FROM "model" WHERE ("model"."x" = 123)}
+
+    query = from(e in Model, where: e.x == 123, select: [:x]) |> normalize
+    query = SQL.delete_all(query)
+    assert query.sql == ~s{DELETE FROM "model" WHERE ("model"."x" = 123)}
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"x"}],
+      query_type: "DELETE"
+    }
 
     assert_raise ArgumentError, "JOINS are not supported on DELETE statements by SQLite", fn ->
       query = Model |> join(:inner, [p], q in Model2, p.x == q.z) |> normalize

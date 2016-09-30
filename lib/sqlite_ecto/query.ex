@@ -127,8 +127,10 @@ defmodule Sqlite.Ecto.Query do
     {table, _name, _model} = elem(sources, 0)
     fields = update_fields(query.updates, sources)
     where = where(query.wheres, sources)
+    returning = returning_info(query.prefix, table, query, "UPDATE", sources)
     %Query{
-      sql: assemble ["UPDATE", quote_id(table), "SET", fields, where]
+      sql: assemble(["UPDATE", quote_id(table), "SET", fields, where]),
+      returning: returning
     }
   end
 
@@ -139,8 +141,10 @@ defmodule Sqlite.Ecto.Query do
     sources = create_names(query, :delete)
     {table, _name, _model} = elem(sources, 0)
     where = where(query.wheres, sources)
+    returning = returning_info(query.prefix, table, query, "DELETE", sources)
     %Query{
-      sql: assemble ["DELETE FROM", quote_id(table), where]
+      sql: assemble(["DELETE FROM", quote_id(table), where]),
+      returning: returning
     }
   end
 
@@ -401,6 +405,23 @@ defmodule Sqlite.Ecto.Query do
       query_type: cmd
     }
   end
+
+  defp returning_info(_, _, %Ecto.Query{select: nil}, _, _), do: nil
+  defp returning_info(prefix, table, %Ecto.Query{select: %{fields: fields}}, cmd, sources) do
+    cols =
+      fields
+      |> Enum.map(&expr(&1, sources))
+      |> assemble
+      |> String.split(", ")
+      |> Enum.map(fn (field) -> field |> String.split(".") |> Enum.at(1) end)
+
+    %ReturningInfo{
+      table: quote_id({prefix, table}),
+      cols: cols,
+      query_type: cmd
+    }
+  end
+
 
   ## Query generation
 
