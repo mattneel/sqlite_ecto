@@ -317,7 +317,7 @@ defmodule Sqlite.Ecto.Test do
                [{:add, :title, :string, [default: "Untitled", size: 100, null: false]},
                 {:add, :author_id, references(:author), []}]}
     query = SQL.execute_ddl(alter)
-    assert query.sql == ~s{ALTER TABLE "posts" ADD COLUMN "title" TEXT DEFAULT 'Untitled' NOT NULL; ALTER TABLE "posts" ADD COLUMN "author_id" CONSTRAINT "posts_author_id_fkey" REFERENCES "author"("id")}
+    assert query.sql == [~s{ALTER TABLE "posts" ADD COLUMN "title" TEXT DEFAULT 'Untitled' NOT NULL}, ~s{ALTER TABLE "posts" ADD COLUMN "author_id" CONSTRAINT "posts_author_id_fkey" REFERENCES "author"("id")}]
   end
 
   test "alter table with prefix" do
@@ -325,7 +325,7 @@ defmodule Sqlite.Ecto.Test do
                [{:add, :title, :string, [default: "Untitled", size: 100, null: false]},
                 {:add, :author_id, references(:author, prefix: :foo), []}]}
 
-    assert SQL.execute_ddl(alter).sql == ~s{ALTER TABLE "foo"."posts" ADD COLUMN "title" TEXT DEFAULT 'Untitled' NOT NULL; ALTER TABLE "foo"."posts" ADD COLUMN "author_id" CONSTRAINT "posts_author_id_fkey" REFERENCES "foo"."author"("id")}
+    assert SQL.execute_ddl(alter).sql == [~s{ALTER TABLE "foo"."posts" ADD COLUMN "title" TEXT DEFAULT 'Untitled' NOT NULL}, ~s{ALTER TABLE "foo"."posts" ADD COLUMN "author_id" CONSTRAINT "posts_author_id_fkey" REFERENCES "foo"."author"("id")}]
   end
 
   test "alter table execute", context do

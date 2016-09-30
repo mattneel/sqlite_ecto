@@ -40,7 +40,13 @@ defmodule Sqlite.Ecto.Query do
     returning_query(pid, query, params, opts)
   end
 
-  # ALTER TABLE queries:
+  def execute(pid, %Query{sql: sql}, [], opts) when is_list(sql) do
+    Enum.reduce(sql, :ok, fn
+      (_, {:error, _} = error) -> error
+      (statement, _) -> execute(pid, %Query{sql: statement}, [], opts)
+    end)
+  end
+
   def execute(pid, %Query{sql: <<"ALTER TABLE ", _ :: binary>>=sql}, params, opts) do
     sql
     |> String.split("; ")

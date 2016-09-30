@@ -41,7 +41,7 @@ defmodule Sqlite.Ecto.DDL do
   # Alter a table.
   def execute_ddl({:alter, %Table{} = table, changes}) do
     %Query{
-      sql: Enum.map_join(changes, "; ", fn (change) ->
+      sql: Enum.map(changes, fn (change) ->
         assemble ["ALTER TABLE", quote_table(table), alter_table_suffix(table, change)]
       end)
     }
