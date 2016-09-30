@@ -74,6 +74,22 @@ defmodule Sqlite.Ecto.Test do
     assert query.sql == ~s{INSERT INTO "prefix"."model" DEFAULT VALUES}
   end
 
+  test "insert many with defaults" do
+    query = SQL.insert(nil, "model", [:x, :y], [[:x, nil], [nil, :y], [:x, :y], [nil, nil]], [:id])
+    assert query.sql == [
+      ~s{INSERT INTO "model" ("x") VALUES (?1)},
+      ~s{INSERT INTO "model" ("y") VALUES (?1)},
+      ~s{INSERT INTO "model" ("x", "y") VALUES (?1,?2)},
+      ~s{INSERT INTO "model" DEFAULT VALUES}
+    ]
+    assert query.sql_param_count == [1, 1, 2, 0]
+    assert query.returning == %ReturningInfo{
+      table: ~s{"model"},
+      cols: [~s{"id"}],
+      query_type: "INSERT"
+    }
+  end
+
   test "update" do
     query = SQL.update(nil, "model", [:x, :y], [:id], [:x, :z])
     assert query.sql == ~s{UPDATE "model" SET "x" = ?1, "y" = ?2 WHERE "id" = ?3}

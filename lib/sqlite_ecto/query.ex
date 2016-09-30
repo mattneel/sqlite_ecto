@@ -41,10 +41,30 @@ defmodule Sqlite.Ecto.Query do
   end
 
   def execute(pid, %Query{sql: sql}, [], opts) when is_list(sql) do
-    Enum.reduce(sql, :ok, fn
+    sql
+    |> Enum.scan(:ok, fn
       (_, {:error, _} = error) -> error
       (statement, _) -> execute(pid, %Query{sql: statement}, [], opts)
     end)
+    |> merge_query_results
+  end
+
+  def execute(pid, %Query{sql: sql, sql_param_count: param_counts}, params, opts)
+  when is_list(sql) and is_list(param_counts) do
+    param_counts
+    |> Enum.scan({nil, params}, fn
+      (count, {_, params}) ->
+        Enum.split(params, count)
+    end)
+    |> Enum.map(fn {chunk, _} -> chunk end)
+    |> Enum.zip(sql)
+    |> Enum.scan(:ok, fn
+      (_, {:error, _} = error) ->
+        error
+      ({params, statement}, _) ->
+        execute(pid, %Query{sql: statement}, params, opts)
+    end)
+    |> merge_query_results
   end
 
   def execute(pid, %Query{sql: <<"ALTER TABLE ", _ :: binary>>=sql}, params, opts) do
@@ -67,6 +87,17 @@ defmodule Sqlite.Ecto.Query do
     end)
 
     do_execute(pid, sql, params, opts)
+  end
+
+  defp merge_query_results(results) do
+    Enum.reduce(results, fn
+      ({:ok, %{num_rows: n, rows: rows}}, {:ok, %{num_rows: n2}}) ->
+        {:ok, %{num_rows: n + n2, rows: rows}}
+      ({:error, _} = error, _) ->
+        error
+      (_, {:error, _} = error) ->
+        error
+    end)
   end
 
   def all(%Ecto.Query{lock: lock}) when lock != nil do
@@ -117,43 +148,62 @@ defmodule Sqlite.Ecto.Query do
     returning = returning_info(prefix, table, returning, "INSERT")
     %Query{
       sql: assemble(["INSERT INTO", quote_id({prefix, table}), "DEFAULT VALUES"]),
-      returning: returning
-    }
-  end
-  def insert(prefix, table, header, [row], returning) do
-    # Ecto sometimes populates columns in a row with nil, which it expects to be
-    # replaced by DEFAULT. However, sqlite doesn't support DEFAULT in an INSERT
-    # statement.
-    # So for the simple case of a single row insert we make sure not to include
-    # rows to be set to default in the statement.
-    {header, row} =
-      Enum.zip(header, row)
-      |> Enum.reject(fn
-        {_, nil} -> true
-        _ -> false
-      end)
-      |> Enum.unzip
-
-    cols = map_intersperse(header, ",", &quote_id/1)
-    vals = insert_all([row], 1, "")
-    returning = returning_info(prefix, table, returning, "INSERT")
-    %Query{
-      sql: assemble([
-        "INSERT INTO", quote_id({prefix, table}), "(", cols, ")",
-        "VALUES", vals
-      ]),
+      sql_param_count: 0,
       returning: returning
     }
   end
   def insert(prefix, table, header, rows, returning) do
+    # Ecto sometimes populates columns in a row with nil, which it expects to be
+    # replaced by DEFAULT. However, sqlite doesn't support DEFAULT in an INSERT
+    # statement, so we need to split this into many different queries.
+    if Enum.any?(rows, fn row -> nil in row end) do
+      multiple_insert(prefix, table, header, rows, returning)
+    else
+      simple_insert(prefix, table, header, rows, returning)
+    end
+  end
+
+  defp multiple_insert(prefix, table, header, rows, returning) do
+    # We've got some default values to handle, so create a Query that contains
+    # some sql for each individual row we need to insert.
+    {sql, param_counts} =
+      rows
+      |> Enum.map(fn row ->
+        {header, row} = drop_default_cols(header, row)
+
+        %Query{sql: sql, sql_param_count: param_count} =
+          insert(prefix, table, header, [row], [])
+
+        {sql, param_count}
+      end)
+      |> Enum.unzip
+
+    %Query{
+      sql: sql,
+      sql_param_count: param_counts,
+      returning: returning_info(prefix, table, returning, "INSERT")
+    }
+  end
+
+  defp drop_default_cols(header, row) do
+    Enum.zip(header, row)
+    |> Enum.reject(fn
+      {_, nil} -> true
+      _ -> false
+    end)
+    |> Enum.unzip
+  end
+
+  def simple_insert(prefix, table, header, rows, returning) do
     cols = map_intersperse(header, ",", &quote_id/1)
-    vals = insert_all(rows, 1, "")
+    {param_counter, vals} = insert_all(rows, 1, "")
     returning = returning_info(prefix, table, returning, "INSERT")
     %Query{
       sql: assemble([
         "INSERT INTO", quote_id({prefix, table}), "(", cols, ")",
         "VALUES", vals
       ]),
+      sql_param_count: param_counter - 1,
       returning: returning
     }
   end
@@ -162,8 +212,8 @@ defmodule Sqlite.Ecto.Query do
     {counter, row} = insert_each(row, counter, "")
     insert_all(rows, counter, acc <> ",(" <> row <> ")")
   end
-  defp insert_all([], _counter, "," <> acc) do
-    acc
+  defp insert_all([], counter, "," <> acc) do
+    {counter, acc}
   end
 
   defp insert_each([nil|t], counter, acc),
