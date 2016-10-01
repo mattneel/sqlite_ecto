@@ -14,6 +14,10 @@ if Code.ensure_loaded?(Sqlitex.Server) do
       end
     end
 
+    def execute(conn, query, params, opts) when is_binary(query) do
+      execute(conn, %Sqlite.Ecto.Query{sql: query}, params, opts)
+    end
+
     def execute(conn, %Sqlite.Ecto.Query{} = query, params, opts) do
       query = %Sqlite.Ecto.Protocol.Query{sql: query}
       execute(conn, query, params, opts)
