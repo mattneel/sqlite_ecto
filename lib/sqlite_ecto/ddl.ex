@@ -1,9 +1,11 @@
 defmodule Sqlite.Ecto.DDL do
   @moduledoc false
 
+
   alias Ecto.Migration.Table
   alias Ecto.Migration.Index
   alias Ecto.Migration.Reference
+  alias Sqlite.Ecto.Query
   import Sqlite.Ecto.Util, only: [assemble: 1, map_intersperse: 3, quote_id: 1]
 
   # Raise error on NoSQL arguments.
@@ -14,25 +16,40 @@ defmodule Sqlite.Ecto.DDL do
   # Create a table.
   def execute_ddl({command, %Table{} = table, columns})
   when command in [:create, :create_if_not_exists] do
-    assemble [create_table(command), quote_table(table), column_definitions(table, columns), table.options]
+    table_name = quote_table(table)
+    column_defs = column_definitions(table, columns)
+
+    defs_and_constraints =
+      case table_constraints(table, columns) do
+        [] -> column_defs
+        constraints -> [column_defs, ",", constraints]
+      end
+
+    %Query{
+      sql: assemble [
+        create_table(command), table_name, "(", defs_and_constraints, ")", table.options
+      ]
+    }
   end
 
   # Drop a table.
   def execute_ddl({command, %Table{} = table})
   when command in [:drop, :drop_if_exists] do
-    assemble [drop_table(command), quote_table(table)]
+    %Query{ sql: assemble [drop_table(command), quote_table(table)] }
   end
 
   # Alter a table.
   def execute_ddl({:alter, %Table{} = table, changes}) do
-    Enum.map_join(changes, "; ", fn (change) ->
-      assemble ["ALTER TABLE", quote_table(table), alter_table_suffix(table, change)]
-    end)
+    %Query{
+      sql: Enum.map(changes, fn (change) ->
+        assemble ["ALTER TABLE", quote_table(table), alter_table_suffix(table, change)]
+      end)
+    }
   end
 
   # Rename a table.
   def execute_ddl({:rename, %Table{} = old, %Table{} = new}) do
-    "ALTER TABLE #{quote_table(old)} RENAME TO #{quote_table(new)}"
+    %Query{sql: "ALTER TABLE #{quote_table(old)} RENAME TO #{quote_table(new)}"}
   end
 
   # Rename a table column.
@@ -47,13 +64,15 @@ defmodule Sqlite.Ecto.DDL do
     create_index = create_index(command, index.unique)
     table = quote_table(index.prefix, index.table)
     fields = map_intersperse(index.columns, ",", &quote_id/1)
-    assemble [create_index, quote_id(index.name), "ON", table, "(", fields, ")"]
+    %Query{
+      sql: assemble [create_index, quote_id(index.name), "ON", table, "(", fields, ")"]
+    }
   end
 
   # Drop an index.
   def execute_ddl({command, %Index{name: name}})
   when command in [:drop, :drop_if_exists] do
-    assemble [drop_index(command), quote_id(name)]
+    %Query{sql: assemble [drop_index(command), quote_id(name)]}
   end
 
   # Raise error on NoSQL arguments.
@@ -62,7 +81,7 @@ defmodule Sqlite.Ecto.DDL do
   end
 
   # Default:
-  def execute_ddl(default) when is_binary(default), do: default
+  def execute_ddl(default) when is_binary(default), do: %Query{sql: default}
 
   ## Helpers
 
@@ -84,7 +103,7 @@ defmodule Sqlite.Ecto.DDL do
   defp drop_table(:drop_if_exists), do: "DROP TABLE IF EXISTS"
 
   defp column_definitions(table, cols) do
-    ["(", map_intersperse(cols, ",", &column_definition(table, &1)), ")"]
+    map_intersperse(cols, ",", &column_definition(table, &1))
   end
 
   defp column_definition(table, {_action, name, ref = %Reference{}, opts}) do
@@ -95,6 +114,26 @@ defmodule Sqlite.Ecto.DDL do
   defp column_definition({_action, name, type, opts}) do
     opts = Enum.into(opts, %{})
     [quote_id(name), column_type(type, opts), column_constraints(type, opts)]
+  end
+
+  def table_constraints(table, columns) do
+    IO.inspect table
+    IO.inspect columns
+
+    primary_keys =
+      columns
+      |> Enum.filter(fn
+        {_, _, :serial, _} -> false
+        {_, _, _, opts} -> Keyword.get(opts, :primary_key, false)
+      end)
+
+    case primary_keys do
+      [] -> []
+      keys ->
+        key_names = Enum.map(keys, fn {_, name, _, _} -> quote_id(name) end)
+
+        ["PRIMARY KEY(", Enum.join(key_names, ", "), ")"]
+    end
   end
 
   # Foreign keys:
@@ -122,6 +161,7 @@ defmodule Sqlite.Ecto.DDL do
   defp column_type(:serial, _opts), do: "INTEGER"
   defp column_type(:string, _opts), do: "TEXT"
   defp column_type(:map, _opts), do: "TEXT"
+  defp column_type({:map, _}, _opts), do: "TEXT"
   defp column_type({:array, _}, _opts), do: raise(ArgumentError, "Array type is not supported by SQLite")
   defp column_type(type, _opts), do: type |> Atom.to_string |> String.upcase
 
@@ -131,10 +171,6 @@ defmodule Sqlite.Ecto.DDL do
   # NOTE The order of these constraints does not matter to SQLite, but
   # rearranging them may cause tests that rely on their order to fail.
   defp column_constraints(_type, opts), do: column_constraints(opts)
-  defp column_constraints(opts=%{primary_key: true}) do
-    other_constraints = opts |> Map.delete(:primary_key) |> column_constraints
-    ["PRIMARY KEY" | other_constraints]
-  end
   defp column_constraints(opts=%{default: default}) do
     val = case default do
       true -> 1

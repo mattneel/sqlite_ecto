@@ -37,13 +37,30 @@ defmodule Sqlite.Ecto do
 
   ## Custom SQLite Types
 
-  def load({:embed, _} = type, binary) when is_binary(binary) do
-    super(type, json_library.decode!(binary))
+  def loaders({:embed, _} = type, _), do: [&load_embed(type, &1)]
+  def loaders(:map, _), do: [&json_library.decode/1]
+  def loaders({:map, _}, _), do: [&json_library.decode/1]
+  def loaders(:datetime, _), do: [&load_datetime/1]
+  def loaders(primitive_type, ecto_type), do: super(primitive_type, ecto_type)
+
+  defp load_embed(type, data) do
+    case json_library.decode(data) do
+      {:ok, map} ->
+        Ecto.Type.load(type, map, fn
+          {:embed, _} = type, value -> load_embed(type, value)
+          type, value -> Ecto.Type.cast(type, value)
+        end)
+      _ -> :error
+    end
   end
-  def load(:map, binary) when is_binary(binary) do
-    super(:map, json_library.decode!(binary))
+
+  defp load_datetime(datetime) do
+    # Datetime loading is a bit odd: sometimes we'll get erlang datetime tuples
+    # out, because Sqlitex does that conversion for us. Other times Sqlitex
+    # doesn't realise we've got a DATETIME column, so we get a string.
+    # Luckily, Ecto.DateTime.cast handles both of these cases.
+    Ecto.DateTime.cast(datetime)
   end
-  def load(type, value), do: super(type, value)
 
   ## Storage API
 

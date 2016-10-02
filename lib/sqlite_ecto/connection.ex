@@ -2,24 +2,38 @@ if Code.ensure_loaded?(Sqlitex.Server) do
   defmodule Sqlite.Ecto.Connection do
     @moduledoc false
 
-    @behaviour Ecto.Adapters.SQL.Query
+    @behaviour Ecto.Adapters.SQL.Connection
 
-    # Connect to a new Sqlite.Server.  Enable and verify the foreign key
-    # constraints for the connection.
-    def connect(opts) do
-      {database, opts} = Keyword.pop(opts, :database)
-      case Sqlitex.Server.start_link(database, opts) do
-        {:ok, pid} ->
-          :ok = Sqlitex.Server.exec(pid, "PRAGMA foreign_keys = ON")
-          [[foreign_keys: 1]] = Sqlitex.Server.query(pid, "PRAGMA foreign_keys")
-          {:ok, pid}
-        error -> error
+    def prepare_execute(conn, name, sql, params, opts) do
+      query = %Sqlite.Ecto.Protocol.Query{sql: sql}
+      case DBConnection.prepare_execute(conn, query, params, opts) do
+        {:ok, _, _} = ok ->
+          ok
+        error ->
+          error
       end
     end
 
-    def disconnect(pid) do
-      Sqlitex.Server.stop(pid)
-      :ok
+    def execute(conn, query, params, opts) when is_binary(query) do
+      execute(conn, %Sqlite.Ecto.Query{sql: query}, params, opts)
+    end
+
+    def execute(conn, %Sqlite.Ecto.Query{} = query, params, opts) do
+      query = %Sqlite.Ecto.Protocol.Query{sql: query}
+      execute(conn, query, params, opts)
+    end
+
+    def execute(conn, query, params, opts) do
+      case DBConnection.execute(conn, query, params, opts) do
+        {:ok, _, result} ->
+          {:ok, result}
+        error ->
+          error
+      end
+    end
+
+    def child_spec(opts) do
+      DBConnection.child_spec(Sqlite.Ecto.Protocol, opts)
     end
 
     defdelegate to_constraints(error), to: Sqlite.Ecto.Error
@@ -50,7 +64,7 @@ if Code.ensure_loaded?(Sqlitex.Server) do
 
     defdelegate delete_all(query), to: Query
 
-    defdelegate insert(prefix, table, fields, returning), to: Query
+    defdelegate insert(prefix, table, header, rows, returning), to: Query
 
     defdelegate update(prefix, table, fields, filters, returning), to: Query
 
